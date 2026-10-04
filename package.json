@@ -1,0 +1,19 @@
+{
+  "name": "city-lights",
+  "version": "0.1.0",
+  "description": "万家灯火 City Lights — 旋转电线、点亮每一户人家的解谜小游戏（TS + Canvas，零运行时依赖）",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "type": "module",
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.2",
+    "vitest": "^5.0.3"
+  },
+  "private": true
+}

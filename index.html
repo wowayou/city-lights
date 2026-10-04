@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#050918" />
+    <meta name="description" content="万家灯火 City Lights — 转动电线，把每一户人家都点亮的解谜小游戏。每日一题，手机电脑都能玩。" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./icon-180.png" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <title>万家灯火 · City Lights</title>
+  </head>
+  <body>
+    <main id="app" data-screen="home">
+      <canvas id="stage" role="img"></canvas>
+
+      <header class="hud">
+        <button type="button" class="icon-btn play-only" data-action="home">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5" /></svg>
+        </button>
+        <div class="hud-mid play-only">
+          <p class="hud-title"></p>
+          <p class="hud-stats"><span class="hud-time">0:00</span> · <span class="hud-moves"></span></p>
+        </div>
+        <button type="button" class="icon-btn play-only" data-action="reset">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 12a6.5 6.5 0 1 0 2-4.7" /><path d="M5 4.5v4h4" /></svg>
+        </button>
+        <button type="button" class="icon-btn" data-action="sound" aria-pressed="true">
+          <svg class="icon-on" viewBox="0 0 24 24" aria-hidden="true"><path class="fill" d="M4 9.5h3.2L12 5.4v13.2l-4.8-4.1H4z" /><path d="M15.5 9a4.2 4.2 0 0 1 0 6M18 6.6a7.6 7.6 0 0 1 0 10.8" /></svg>
+          <svg class="icon-off" viewBox="0 0 24 24" aria-hidden="true"><path class="fill" d="M4 9.5h3.2L12 5.4v13.2l-4.8-4.1H4z" /><path d="M15.5 9.5l5 5M20.5 9.5l-5 5" /></svg>
+        </button>
+      </header>
+
+      <p class="hint" aria-hidden="true"></p>
+
+      <section class="screen home-screen">
+        <h1 class="logo"></h1>
+        <p class="logo-sub">CITY LIGHTS · 万家灯火</p>
+        <p class="tagline"></p>
+        <div class="menu">
+          <button type="button" class="big-btn primary" data-action="daily"><b class="daily-label"></b><span class="daily-sub"></span></button>
+          <button type="button" class="big-btn" data-action="levels"><b class="level-label"></b><span class="level-sub"></span></button>
+        </div>
+        <p class="howto"></p>
+      </section>
+
+      <section class="screen won-screen" role="status">
+        <div class="card">
+          <h2 class="won-title"></h2>
+          <p class="won-sub"></p>
+          <p class="won-lanterns" aria-hidden="true"></p>
+          <dl class="stats">
+            <div><dt class="time-label"></dt><dd class="won-time"></dd></div>
+            <div><dt class="moves-label"></dt><dd class="won-moves"></dd></div>
+            <div><dt class="par-label"></dt><dd class="won-par"></dd></div>
+          </dl>
+          <p class="won-extra"></p>
+          <div class="actions">
+            <button type="button" class="big-btn primary won-primary"></button>
+            <button type="button" class="big-btn" data-action="home"><b class="home-label"></b></button>
+          </div>
+        </div>
+      </section>
+
+      <p class="toast" role="status" aria-live="polite"></p>
+    </main>
+    <noscript>万家灯火需要 JavaScript 才能运行。City Lights needs JavaScript.</noscript>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
