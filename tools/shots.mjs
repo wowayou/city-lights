@@ -1,6 +1,6 @@
 // Drives the production build in headless Chromium over CDP (no npm deps):
 // real clicks, a long-press lock, solving a level and the daily, screenshots.
-// Usage: npm run build && [SHOT_LANG=zh-CN] node tools/shots.mjs <outDir>
+// Usage: npm run build && [SHOT_LANG=zh-CN] [BASE=https://…/] node tools/shots.mjs <outDir>
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -10,7 +10,9 @@ mkdirSync(out, { recursive: true });
 const CHROME = process.env.CHROME ?? `${homedir()}/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const server = spawn('npx', ['vite', 'preview', '--port', '4199', '--strictPort'], { stdio: 'ignore' });
+// BASE=<url> checks a deployed site instead of a local `vite preview`.
+const BASE = process.env.BASE ?? 'http://localhost:4199/';
+const server = process.env.BASE ? null : spawn('npx', ['vite', 'preview', '--port', '4199', '--strictPort'], { stdio: 'ignore' });
 const chrome = spawn(CHROME, ['--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--remote-debugging-port=9333', '--user-data-dir=/tmp/cl-chrome-' + process.pid, 'about:blank'], { stdio: 'ignore' });
 const failures = [];
 const check = (ok, msg) => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${msg}`); if (!ok) failures.push(msg); };
@@ -49,7 +51,7 @@ try {
 
   for (const [label, w, h, mobile] of [['phone', 390, 844, true], ['desktop', 1280, 800, false]]) {
     await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: mobile ? 2 : 1, mobile });
-    await send('Page.navigate', { url: 'http://localhost:4199/?debug' });
+    await send('Page.navigate', { url: `${BASE}?debug` });
     await sleep(800);
     await evaluate('localStorage.clear()');
     await send('Page.reload');
@@ -122,6 +124,6 @@ try {
   ws.close();
 } finally {
   chrome.kill();
-  server.kill();
+  server?.kill();
 }
 process.exit(failures.length ? 1 : 0);
