@@ -48,6 +48,15 @@ export class Sfx {
     this.tone(240, 0, 0.09, 'square', 0.05, 170);
   }
 
+  undo(): void {
+    this.tone(520, 0, 0.07, 'triangle', 0.12, 700);
+  }
+
+  hint(): void {
+    this.tone(note(9), 0, 0.35, 'sine', 0.12);
+    this.tone(note(12), 0.07, 0.5, 'sine', 0.1);
+  }
+
   /** A bell whose pitch climbs with the number of homes lit. */
   light(count: number): void {
     const f = note(Math.min(count - 1, 14));

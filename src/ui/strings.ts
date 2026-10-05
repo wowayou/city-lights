@@ -26,8 +26,24 @@ export interface Strings {
   copied: string;
   resetConfirm: string;
   date: (key: string) => string;
-  shareText: (n: number, size: string, lanterns: string, time: string, moves: number) => string;
-  aria: { home: string; reset: string; sound: string; board: string };
+  shareText: (n: number, size: string, lanterns: string, time: string, moves: number, hints: number) => string;
+  dailyResume: (time: string) => string;
+  undo: string;
+  hintBtn: string;
+  reset: string;
+  noUndo: string;
+  hintConfirm: string;
+  lockedTap: string;
+  hintsUsed: (n: number) => string;
+  replayMine: string;
+  replayRef: string;
+  playerMine: string;
+  playerRef: string;
+  close: string;
+  allLevels: string;
+  levelsTitle: string;
+  levelsCount: (cleared: number) => string;
+  aria: { home: string; reset: string; sound: string; board: string; restart: string; toggle: string; speed: string; seek: string };
 }
 
 const zh: Strings = {
@@ -58,8 +74,24 @@ const zh: Strings = {
   copied: '成绩已复制',
   resetConfirm: '再点一次，从头开始',
   date: (key) => `${Number(key.slice(5, 7))}月${Number(key.slice(8, 10))}日`,
-  shareText: (n, size, lanterns, time, moves) => `万家灯火 #${n} · ${size}\n${lanterns} ${time} · ${moves} 步`,
-  aria: { home: '返回主页', reset: '从头开始', sound: '声音开关', board: '电网棋盘' },
+  shareText: (n, size, lanterns, time, moves, hints) => `万家灯火 #${n} · ${size}\n${lanterns} ${time} · ${moves} 步${hints ? ` · 💡${hints}` : ''}`,
+  dailyResume: (time) => `继续 · 已用时 ${time}`,
+  undo: '撤销',
+  hintBtn: '提示',
+  reset: '重来',
+  noUndo: '没有可以撤销的操作',
+  hintConfirm: '每次提示少一盏灯笼，再点一次确认',
+  lockedTap: '这一格锁住了，长按解锁',
+  hintsUsed: (n) => `用了 ${n} 次提示`,
+  replayMine: '回放',
+  replayRef: '参考解法',
+  playerMine: '你的解法',
+  playerRef: '参考解法',
+  close: '返回',
+  allLevels: '全部关卡',
+  levelsTitle: '选关',
+  levelsCount: (n) => `已通过 ${n} 关`,
+  aria: { home: '返回主页', reset: '从头开始', sound: '声音开关', board: '电网棋盘', restart: '从头播放', toggle: '播放 / 暂停', speed: '播放速度', seek: '播放进度' },
 };
 
 const en: Strings = {
@@ -90,8 +122,24 @@ const en: Strings = {
   copied: 'Result copied',
   resetConfirm: 'Tap again to start over',
   date: (key) => new Date(`${key}T12:00:00`).toLocaleDateString('en', { month: 'short', day: 'numeric' }),
-  shareText: (n, size, lanterns, time, moves) => `City Lights #${n} · ${size}\n${lanterns} ${time} · ${moves} moves`,
-  aria: { home: 'Back to home', reset: 'Start over', sound: 'Sound', board: 'Power grid board' },
+  shareText: (n, size, lanterns, time, moves, hints) => `City Lights #${n} · ${size}\n${lanterns} ${time} · ${moves} moves${hints ? ` · 💡${hints}` : ''}`,
+  dailyResume: (time) => `Continue · ${time} so far`,
+  undo: 'Undo',
+  hintBtn: 'Hint',
+  reset: 'Restart',
+  noUndo: 'Nothing to undo',
+  hintConfirm: 'Each hint costs a lantern. Tap again to use one',
+  lockedTap: 'This tile is locked. Hold to unlock',
+  hintsUsed: (n) => `${n} ${n === 1 ? 'hint' : 'hints'} used`,
+  replayMine: 'Replay',
+  replayRef: 'Solution',
+  playerMine: 'Your solve',
+  playerRef: 'Reference solution',
+  close: 'Done',
+  allLevels: 'All levels',
+  levelsTitle: 'Levels',
+  levelsCount: (n) => `${n} cleared`,
+  aria: { home: 'Back to home', reset: 'Start over', sound: 'Sound', board: 'Power grid board', restart: 'Play from the start', toggle: 'Play / pause', speed: 'Playback speed', seek: 'Playback position' },
 };
 
 export function pickStrings(languages: readonly string[]): Strings {

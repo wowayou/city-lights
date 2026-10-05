@@ -61,6 +61,11 @@ export function lanterns(moves: number, par: number): number {
   return r <= 1 ? 5 : r <= 1.25 ? 4 : r <= 1.6 ? 3 : r <= 2.2 ? 2 : 1;
 }
 
+/** Lanterns for a finished puzzle: each hint costs one, never below one. */
+export function rating(r: { moves: number; par: number; hints?: number }): number {
+  return Math.max(1, lanterns(r.moves, r.par) - (r.hints ?? 0));
+}
+
 export function formatTime(ms: number): string {
   const s = Math.floor(ms / 1000);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;

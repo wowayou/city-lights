@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Board } from '../src/game/board';
-import { DAILY_SIZE, dailyNumber, dailyPuzzle, dateKey, formatTime, lanterns, levelPuzzle, levelSize, shiftKey, streak } from '../src/game/modes';
+import { DAILY_SIZE, dailyNumber, dailyPuzzle, dateKey, formatTime, lanterns, levelPuzzle, levelSize, rating, shiftKey, streak } from '../src/game/modes';
 import { store } from '../src/storage';
 
 describe('daily', () => {
@@ -82,13 +82,46 @@ describe('storage', () => {
   it('round-trips results and rejects saves that do not fit the board', () => {
     vi.stubGlobal('localStorage', fake());
     store.setDaily('2026-10-04', { time: 1000, moves: 30, par: 25 });
-    store.setDaily('2026-10-05', { time: 2000, moves: 31, par: 25 });
+    store.setDaily('2026-10-05', { time: 2000, moves: 31, par: 25, hints: 1, log: [4, 0, 5, 120] });
     expect(Object.keys(store.daily())).toEqual(['2026-10-04', '2026-10-05']);
-    const save = { rot: [0, 1, 2, 3], locked: [0, 0, 1, 0], moves: 3, elapsed: 500 };
+    expect(store.daily()['2026-10-05'].log).toEqual([4, 0, 5, 120]);
+    const save = { log: [4, 0, 8, 300], elapsed: 500, hints: 0 };
     store.setSave('level:2', save);
     expect(store.save('level:2', 4)).toEqual(save);
+    expect(store.save('level:2', 9)).toEqual(save); // the log is checked against the board when decoded
+    store.setSave('level:2', { ...save, origin: { rot: [0, 1, 2, 3], locked: [0, 0, 1, 0], moves: 3 } });
     expect(store.save('level:2', 9)).toBeNull();
     store.setSave('level:2', undefined);
     expect(store.save('level:2', 4)).toBeNull();
+  });
+  it('upgrades a first-release save (positions, no log) into an origin', () => {
+    vi.stubGlobal('localStorage', fake({ 'city-lights:v1:save:daily:2026-10-04': JSON.stringify({ rot: [0, 1, 2, 3], locked: [0, 0, 1, 0], moves: 3, elapsed: 500 }) }));
+    expect(store.save('daily:2026-10-04', 4)).toEqual({ log: [], elapsed: 500, hints: 0, origin: { rot: [0, 1, 2, 3], locked: [0, 0, 1, 0], moves: 3 } });
+    expect(store.save('daily:2026-10-04', 5)).toBeNull();
+  });
+  it('keeps the best result per level: more lanterns first, then faster', () => {
+    vi.stubGlobal('localStorage', fake());
+    store.setLevelResult(3, { time: 9000, moves: 10, par: 10, hints: 0 });
+    store.setLevelResult(3, { time: 1000, moves: 10, par: 10, hints: 1 }); // faster but a hint costs a lantern
+    expect(store.levels()[3].time).toBe(9000);
+    store.setLevelResult(3, { time: 5000, moves: 10, par: 10, hints: 0, log: [1, 2] });
+    expect(store.levels()[3]).toEqual({ time: 5000, moves: 10, par: 10, hints: 0 });
+  });
+  it('keeps replay logs only for recent dailies', () => {
+    vi.stubGlobal('localStorage', fake());
+    for (let d = 0; d < 40; d++) store.setDaily(shiftKey('2026-10-04', d), { time: 1, moves: 1, par: 1, log: [0, 0] });
+    const all = store.daily();
+    expect(Object.keys(all)).toHaveLength(40);
+    expect(Object.values(all).filter((r) => r.log)).toHaveLength(30);
+    expect(all['2026-10-04'].log).toBeUndefined();
+    expect(all[shiftKey('2026-10-04', 39)].log).toEqual([0, 0]);
+  });
+});
+
+describe('rating', () => {
+  it('takes a lantern per hint but never goes below one', () => {
+    expect(rating({ moves: 10, par: 10 })).toBe(5);
+    expect(rating({ moves: 10, par: 10, hints: 2 })).toBe(3);
+    expect(rating({ moves: 30, par: 10, hints: 3 })).toBe(1);
   });
 });

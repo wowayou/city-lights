@@ -11,6 +11,7 @@ const C = {
   cell: '#151c3c',
   cellLocked: '#232d5c',
   pin: '#a9b8f0',
+  pinHint: '#7fd8ff',
   wireOff: '#323e6e',
   wireOn: '#ffd27a',
   wireCore: 'rgba(255, 248, 225, 0.75)',
@@ -43,6 +44,12 @@ export interface Scene {
   /** 0..1 share of skyline windows that should be lit. */
   skyline: number;
   ambient: boolean;
+  /** Tile that just changed (a ring fades out around it) and why: 0 tap, 1 hint, 2 refused (locked). */
+  focus: number;
+  focusAt: number;
+  focusKind: number;
+  /** Tiles locked by a hint get a different pin. */
+  hintLocked: ReadonlySet<number>;
 }
 
 interface Lantern {
@@ -391,13 +398,15 @@ export class Renderer {
       else this.drawHouse(cx, cy, cell * 0.62, lit, ROOFS[Math.floor(hash(i * 1.37 + w) * ROOFS.length)]);
     }
 
-    // lock pins, hover and keyboard cursor
-    ctx.fillStyle = C.pin;
+    // lock pins, hover, keyboard cursor and the last-changed tile
+    const sinceFocus = t - scene.focusAt;
     for (let i = 0; i < n; i++) {
       if (!board.locked[i]) continue;
       const x = ox + (i % w) * cell, y = oy + Math.floor(i / w) * cell;
+      const shake = i === scene.focus && scene.focusKind === 2 && sinceFocus < 0.35 ? Math.sin(sinceFocus * 60) * 2 * (1 - sinceFocus / 0.35) : 0;
+      ctx.fillStyle = scene.hintLocked.has(i) ? C.pinHint : C.pin;
       ctx.beginPath();
-      ctx.arc(x + cell * 0.16, y + cell * 0.16, Math.max(2.2, cell * 0.05), 0, Math.PI * 2);
+      ctx.arc(x + cell * 0.16 + shake, y + cell * 0.16, Math.max(2.2, cell * 0.05), 0, Math.PI * 2);
       ctx.fill();
     }
     const outline = (i: number, color: string, width: number) => {
@@ -411,6 +420,11 @@ export class Renderer {
     if (wonFor < 0) {
       outline(scene.hover, 'rgba(255, 255, 255, 0.16)', 1.5);
       outline(scene.cursor, 'rgba(255, 207, 107, 0.85)', 2);
+    }
+    if (scene.focus >= 0 && scene.focus < n && sinceFocus < 0.8) {
+      const fade = 1 - sinceFocus / 0.8;
+      const rgb = scene.focusKind === 1 ? '127, 216, 255' : scene.focusKind === 2 ? '169, 184, 240' : '255, 214, 140';
+      outline(scene.focus, `rgba(${rgb}, ${0.9 * fade})`, 2 + 2 * fade);
     }
   }
 
