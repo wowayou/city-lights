@@ -147,7 +147,9 @@ function open(m: Mode): void {
   if (done) {
     // Already solved today: show the city as it was solved, and the result.
     const log = done.log ? decodeLog(done.log, fresh.size) : null;
-    const solved = log ? boardAfter(p, log) : null;
+    // A log that no longer solves this puzzle (e.g. the generator changed) is not shown as a replay.
+    const replayed = log ? boardAfter(p, log) : null;
+    const solved = replayed?.flow().solved ? replayed : null;
     myLog = solved ? log : null;
     myOrigin = undefined;
     // Results from before replays existed carry no log: show the reference solution instead.
