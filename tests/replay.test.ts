@@ -121,15 +121,15 @@ describe('replay', () => {
     expect(boardAfter(p, [{ i: 0, lock: true, hint: false, t: 0 }, { i: 0, lock: false, hint: false, t: 1 }])).toBeNull();
   });
 
-  it('plays back in time, honours speed, and seeking matches stepping', () => {
+  it('plays back in time, honours speed, and seeking matches playing', () => {
     const p = puzzle(5);
     const b = new Board(p);
     scramblePlay(b, 5);
     const pb = new Playback(p, b.log, 'real');
-    pb.playing = true;
+    pb.play();
     expect(pb.tick(100)).toEqual([]); // the opening pause
-    let steps = 0;
-    while (!pb.done && steps++ < 100_000) pb.tick(16);
+    let frames = 0;
+    while (!pb.done && frames++ < 100_000) pb.tick(16);
     expect(pb.playing).toBe(false);
     expect([...pb.board.rot]).toEqual([...b.rot]);
     for (const k of [0, 7, Math.floor(b.log.length / 2), b.log.length]) {
@@ -138,11 +138,71 @@ describe('replay', () => {
     }
     const slow = new Playback(p, referenceActions(p), 'even');
     const fast = new Playback(p, referenceActions(p), 'even');
-    slow.playing = fast.playing = true;
+    slow.play();
+    fast.play();
     fast.speed = 4;
-    slow.tick(3000);
+    slow.tick(12_000);
     fast.tick(3000);
-    expect(fast.k).toBeGreaterThan(slow.k * 3);
+    expect(fast.k).toBe(slow.k); // 4× for 3 s covers what 1× covers in 12 s
+    expect(fast.k).toBeGreaterThan(5);
+  });
+
+  it('a step is one tile: all its turns, the same unit as a hint', () => {
+    const p = puzzle(7, 7, 8);
+    const ref = referenceActions(p);
+    const pb = new Playback(p, ref, 'even');
+    expect(pb.steps).toBe(new Set(ref.map((a) => a.i)).size);
+    // from the scrambled start, repeated hints visit tiles in the walkthrough's order
+    const b = new Board(p);
+    const hinted: number[] = [];
+    for (let h = b.hint(); h; h = b.hint()) hinted.push(h[0].i);
+    expect(hinted).toEqual(pb.starts.map((k) => ref[k].i));
+  });
+
+  it('steps forward one tile per tap, previews it, and steps back', () => {
+    const p = puzzle(8, 7, 8);
+    const ref = referenceActions(p);
+    const pb = new Playback(p, ref, 'even');
+    expect(pb.busy).toBe(false);
+    const first = pb.preview()!;
+    expect(first.i).toBe(ref[0].i);
+    expect(first.mask).toBe(p.base[first.i]); // the reference puts it back to the solved shape
+    pb.next();
+    expect(pb.preview()).toBeNull(); // no preview while animating
+    let frames = 0;
+    while (pb.busy && frames++ < 1000) pb.tick(16);
+    expect(pb.step).toBe(1);
+    expect(pb.k).toBe(pb.starts[1]);
+    expect(pb.board.wrong(first.i)).toBe(false);
+    expect(frames * 16).toBeLessThan(1000); // a step is quick: 220 ms between turns
+    pb.next();
+    pb.tick(16); // half way into step 2
+    if (pb.starts[2] - pb.starts[1] > 1) {
+      pb.pause();
+      expect(pb.step).toBe(1);
+      pb.prev(); // back to the start of the half-played step
+      expect(pb.k).toBe(pb.starts[1]);
+    }
+    pb.prev();
+    expect(pb.k).toBe(0);
+    pb.prev();
+    expect(pb.k).toBe(0);
+    pb.seekStep(pb.steps);
+    expect(pb.done).toBe(true);
+    expect(pb.preview()).toBeNull();
+    expect(pb.board.flow().solved).toBe(true);
+  });
+
+  it('auto-plays the reference at a readable pace', () => {
+    const p = puzzle(9, 7, 8);
+    const pb = new Playback(p, referenceActions(p), 'even');
+    pb.play();
+    let ms = 0;
+    while (!pb.done) {
+      pb.tick(16);
+      ms += 16;
+    }
+    expect(ms).toBeGreaterThan((pb.steps - 1) * 900);
   });
 
   it('starts a legacy save from its own origin', () => {

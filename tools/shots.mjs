@@ -137,18 +137,38 @@ try {
     check(s.solved && !s.playback.playing, `${label}: replay ends solved and paused`);
     await evaluate(`(() => { const el = document.querySelector('.player-seek'); el.value = 1; el.dispatchEvent(new Event('input')); })()`);
     s = await state();
-    check(s.playback.k === 1 && !s.solved, `${label}: seeking back rebuilds the board`);
+    check(s.playback.step === 1 && !s.solved && !s.playback.busy, `${label}: dragging the slider to step 1 rebuilds the board (${s.playback.k} turns in)`);
     await press('[data-action=pb-close]');
     s = await state();
     check(s.dom === 'won' && s.solved, `${label}: closing the replay returns to the solved card`);
 
-    // ---- reference demo
+    // ---- reference demo: waits for a tap per step, previews the next tile, steps back, auto-plays
     await press('[data-action=replay-ref]');
     s = await state();
-    check(s.dom === 'replay' && s.playback.n === s.par, `${label}: reference demo has exactly the reference taps (${s.playback.n})`);
-    check(await waitFor(`__cl.state().playback.done`), `${label}: reference demo finishes`);
+    const hintText = await evaluate(`document.querySelector('.player-hint').textContent`);
+    check(s.dom === 'replay' && s.playback.n === s.par && !s.playback.busy && s.playback.k === 0 && s.playback.preview && hintText,
+      `${label}: reference opens paused at step 0 with a preview (${s.playback.steps} steps, ${s.playback.n} turns, "${hintText}")`);
+    const firstTile = s.playback.preview.i;
+    const boardSpot = await evaluate('__cl.cell(0)');
+    await click(boardSpot); // anywhere on the board
+    check(await waitFor(`!__cl.state().playback.busy`, 3000), `${label}: one tap plays one step`);
     s = await state();
-    check(s.solved, `${label}: reference demo ends solved`);
+    check(s.playback.step === 1 && s.playback.preview?.i !== firstTile, `${label}: after a tap: step 1, preview moved on`);
+    await press('[data-action=pb-next]');
+    await waitFor(`!__cl.state().playback.busy`, 3000);
+    s = await state();
+    check(s.playback.step === 2, `${label}: next-step button plays step 2`);
+    await press('[data-action=pb-prev]');
+    s = await state();
+    check(s.playback.step === 1 && s.playback.preview?.i !== firstTile, `${label}: previous-step button goes back to step 1`);
+    await press('[data-action=pb-toggle]');
+    s = await state();
+    check(s.playback.playing && !(await evaluate(`document.querySelector('.player-hint').textContent`)), `${label}: play button auto-plays and hides the tap hint`);
+    await press('[data-action=pb-speed]');
+    await press('[data-action=pb-speed]');
+    check(await waitFor(`__cl.state().playback.done`, 40000), `${label}: reference demo finishes`);
+    s = await state();
+    check(s.solved && s.playback.step === s.playback.steps, `${label}: reference demo ends solved`);
     await press('[data-action=pb-close]');
 
     // ---- level select
@@ -192,8 +212,16 @@ try {
     check(s.playback.n === before.moves + n && s.playback.k > 0, `${label}: daily replay plays the stored solve (${s.playback.k}/${s.playback.n})`);
     await press('[data-action=pb-close]');
     await press('[data-action=replay-ref]');
-    await sleep(2500);
-    await shot(`${label}-08-reference`);
+    await sleep(400);
+    await shot(`${label}-08-reference-step0`);
+    for (let k = 0; k < 6; k++) {
+      await click(boardSpot);
+      await waitFor(`!__cl.state().playback.busy`, 3000);
+    }
+    await sleep(300);
+    await shot(`${label}-09-reference-step6`);
+    s = await state();
+    check(s.playback.step === 6 && !s.solved, `${label}: six taps walk six tiles of the daily (${s.playback.k}/${s.playback.n} turns)`);
     await press('[data-action=pb-close]');
 
     // ---- a save from the first release (positions only) is upgraded, not lost

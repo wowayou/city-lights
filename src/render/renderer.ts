@@ -50,6 +50,8 @@ export interface Scene {
   focusKind: number;
   /** Tiles locked by a hint get a different pin. */
   hintLocked: ReadonlySet<number>;
+  /** Step-by-step playback: the tile the next step turns and the shape it ends with. */
+  preview: { i: number; mask: number } | null;
 }
 
 interface Lantern {
@@ -379,6 +381,27 @@ export class Renderer {
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
 
+    // next step of a walkthrough: the target shape, dashed, under a breathing ring
+    if (scene.preview && scene.preview.i < n) {
+      const { i, mask } = scene.preview;
+      const cx = ox + ((i % w) + 0.5) * cell, cy = oy + (Math.floor(i / w) + 0.5) * cell;
+      ctx.beginPath();
+      for (const d of DIRS) {
+        if (!(mask & d)) continue;
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + VEC[d][0] * half, cy + VEC[d][1] * half);
+      }
+      // a dark underlay keeps the target readable even over a glowing wire
+      ctx.strokeStyle = 'rgba(8, 11, 30, 0.85)';
+      ctx.lineWidth = Math.max(4, lw * 0.95);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(255, 244, 214, 0.95)';
+      ctx.lineWidth = Math.max(2, lw * 0.4);
+      ctx.setLineDash([lw * 0.7, lw * 0.6]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
     // homes and the station sit upright on top of their wire stub
     for (let i = 0; i < n; i++) {
       const isSource = i === source;
@@ -420,6 +443,11 @@ export class Renderer {
     if (wonFor < 0) {
       outline(scene.hover, 'rgba(255, 255, 255, 0.16)', 1.5);
       outline(scene.cursor, 'rgba(255, 207, 107, 0.85)', 2);
+    }
+    if (scene.preview && scene.preview.i < n) {
+      ctx.setLineDash([6, 5]);
+      outline(scene.preview.i, `rgba(255, 214, 140, ${0.6 + 0.35 * Math.sin(t * 5)})`, 2.5);
+      ctx.setLineDash([]);
     }
     if (scene.focus >= 0 && scene.focus < n && sinceFocus < 0.8) {
       const fade = 1 - sinceFocus / 0.8;

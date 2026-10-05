@@ -40,10 +40,11 @@ export interface Strings {
   playerMine: string;
   playerRef: string;
   close: string;
+  stepHint: string;
   allLevels: string;
   levelsTitle: string;
   levelsCount: (cleared: number) => string;
-  aria: { home: string; reset: string; sound: string; board: string; restart: string; toggle: string; speed: string; seek: string };
+  aria: { home: string; reset: string; sound: string; board: string; prev: string; next: string; toggle: string; speed: string; seek: string };
 }
 
 const zh: Strings = {
@@ -88,10 +89,11 @@ const zh: Strings = {
   playerMine: '你的解法',
   playerRef: '参考解法',
   close: '返回',
+  stepHint: '点棋盘走下一步，▶ 自动播放',
   allLevels: '全部关卡',
   levelsTitle: '选关',
   levelsCount: (n) => `已通过 ${n} 关`,
-  aria: { home: '返回主页', reset: '从头开始', sound: '声音开关', board: '电网棋盘', restart: '从头播放', toggle: '播放 / 暂停', speed: '播放速度', seek: '播放进度' },
+  aria: { home: '返回主页', reset: '从头开始', sound: '声音开关', board: '电网棋盘', prev: '上一步', next: '下一步', toggle: '播放 / 暂停', speed: '播放速度', seek: '播放进度' },
 };
 
 const en: Strings = {
@@ -136,10 +138,11 @@ const en: Strings = {
   playerMine: 'Your solve',
   playerRef: 'Reference solution',
   close: 'Done',
+  stepHint: 'Tap the board for the next step, ▶ to play',
   allLevels: 'All levels',
   levelsTitle: 'Levels',
   levelsCount: (n) => `${n} cleared`,
-  aria: { home: 'Back to home', reset: 'Start over', sound: 'Sound', board: 'Power grid board', restart: 'Play from the start', toggle: 'Play / pause', speed: 'Playback speed', seek: 'Playback position' },
+  aria: { home: 'Back to home', reset: 'Start over', sound: 'Sound', board: 'Power grid board', prev: 'Previous step', next: 'Next step', toggle: 'Play / pause', speed: 'Playback speed', seek: 'Playback position' },
 };
 
 export function pickStrings(languages: readonly string[]): Strings {

@@ -66,7 +66,7 @@ const text: [string, string][] = [
 for (const [sel, s] of text) $(sel).textContent = s;
 const aria: [string, string][] = [
   ['.hud [data-action="home"]', t.aria.home], ['.levels-head [data-action="home"]', t.aria.home],
-  ['.hud [data-action="sound"]', t.aria.sound], ['[data-action="pb-restart"]', t.aria.restart],
+  ['.hud [data-action="sound"]', t.aria.sound], ['[data-action="pb-prev"]', t.aria.prev], ['[data-action="pb-next"]', t.aria.next],
   ['[data-action="pb-toggle"]', t.aria.toggle], ['[data-action="pb-speed"]', t.aria.speed], ['.player-seek', t.aria.seek],
 ];
 for (const [sel, s] of aria) $(sel).setAttribute('aria-label', s);
@@ -408,7 +408,8 @@ function startPlayback(kind: 'mine' | 'ref'): void {
   if (kind === 'mine' && !myLog?.length) return;
   playback = kind === 'mine' ? new Playback(p, myLog!, 'real', myOrigin) : new Playback(p, referenceActions(p), 'even');
   playbackKind = kind;
-  playback.playing = true;
+  // Your own solve plays like a video; the reference waits for a tap per step.
+  if (kind === 'mine') playback.play();
   renderer.clearLanterns();
   wonAt = -1;
   focus = -1;
@@ -426,10 +427,9 @@ function closePlayback(): void {
   setScreen('won');
 }
 
-function seekPlayback(k: number, play: boolean): void {
+/** After the playback board was rebuilt (seek / previous step). */
+function rebuilt(): void {
   if (!playback) return;
-  playback.seek(k);
-  playback.playing = play;
   renderer.clearLanterns();
   show(playback.board);
   wonAt = playback.done ? clock - 10 : -1;
@@ -437,25 +437,45 @@ function seekPlayback(k: number, play: boolean): void {
   updatePlayer();
 }
 
+function playbackNext(): void {
+  if (!playback || playback.done) return;
+  playback.next();
+  updatePlayer();
+}
+
+function playbackToggle(): void {
+  if (!playback) return;
+  if (playback.busy) playback.pause();
+  else {
+    if (playback.done) {
+      playback.seek(0);
+      rebuilt();
+    }
+    playback.play();
+  }
+  updatePlayer();
+}
+
 function updatePlayer(): void {
   if (!playback) return;
-  const n = playback.actions.length;
+  const pb = playback;
   $('.player-title').textContent = playbackKind === 'mine' ? t.playerMine : t.playerRef;
-  $('.player-step').textContent = `${playback.k} / ${n}`;
+  $('.player-step').textContent = `${pb.step} / ${pb.steps}`;
   const seek = $('.player-seek') as HTMLInputElement;
-  seek.max = String(n);
-  seek.value = String(playback.k);
-  $('[data-action="pb-toggle"]').setAttribute('aria-pressed', String(playback.playing));
-  $('[data-action="pb-speed"]').textContent = `${playback.speed}×`;
+  seek.max = String(pb.steps);
+  seek.value = String(pb.step);
+  $('[data-action="pb-toggle"]').setAttribute('aria-pressed', String(pb.playing));
+  $('[data-action="pb-speed"]').textContent = `${pb.speed}×`;
+  $('.player-hint').textContent = pb.busy || pb.done ? '' : t.stepHint;
   updateHud();
 }
 
 function stepPlayback(dtMs: number): void {
   if (!playback || !anim) return;
-  const wasPlaying = playback.playing;
+  const wasBusy = playback.busy;
   const applied = playback.tick(dtMs);
   if (!applied.length) {
-    if (wasPlaying !== playback.playing) updatePlayer(); // reached the end
+    if (wasBusy !== playback.busy) updatePlayer(); // a step or the whole log finished
     return;
   }
   for (const a of applied) if (!a.lock) anim[a.i] -= Math.PI / 2;
@@ -546,16 +566,15 @@ app.addEventListener('click', (e) => {
     case 'replay-ref':
       startPlayback('ref');
       break;
-    case 'pb-restart':
-      seekPlayback(0, true);
+    case 'pb-prev':
+      playback?.prev();
+      rebuilt();
+      break;
+    case 'pb-next':
+      playbackNext();
       break;
     case 'pb-toggle':
-      if (!playback) break;
-      if (playback.done) seekPlayback(0, true);
-      else {
-        playback.playing = !playback.playing;
-        updatePlayer();
-      }
+      playbackToggle();
       break;
     case 'pb-speed':
       if (!playback) break;
@@ -569,7 +588,10 @@ app.addEventListener('click', (e) => {
   btn.blur();
 });
 
-$('.player-seek').addEventListener('input', (e) => seekPlayback(Number((e.target as HTMLInputElement).value), false));
+$('.player-seek').addEventListener('input', (e) => {
+  playback?.seekStep(Number((e.target as HTMLInputElement).value));
+  rebuilt();
+});
 
 interface Press {
   id: number;
@@ -587,6 +609,11 @@ function cancelPress(): void {
 }
 
 canvas.addEventListener('pointerdown', (e) => {
+  if (screen === 'replay' && e.button === 0) {
+    sfx.unlock();
+    playbackNext();
+    return;
+  }
   if (screen !== 'play' || !game) return;
   const i = renderer.hit(game, e.clientX, e.clientY);
   if (i < 0) return;
@@ -633,10 +660,14 @@ window.addEventListener('keydown', (e) => {
   if (screen === 'replay' && playback) {
     if (key === ' ') {
       e.preventDefault();
-      $('[data-action="pb-toggle"]').click();
-    } else if (key === 'arrowleft' || key === 'arrowright') {
+      playbackToggle();
+    } else if (key === 'arrowright' || key === 'enter') {
       e.preventDefault();
-      seekPlayback(playback.k + (key === 'arrowleft' ? -1 : 1), false);
+      playbackNext();
+    } else if (key === 'arrowleft') {
+      e.preventDefault();
+      playback.prev();
+      rebuilt();
     } else if (key === 'escape') closePlayback();
     return;
   }
@@ -688,7 +719,7 @@ const bottomUi: Partial<Record<ScreenName, HTMLElement>> = { play: $('.playbar')
 const scene: Scene = {
   board: null, flow: null, anim: null, hover: -1, cursor: -1, wonAt: -1,
   insetTop: 0, insetBottom: 0, skyline: 0.35, ambient: true,
-  focus: -1, focusAt: -9, focusKind: 0, hintLocked: new Set(),
+  focus: -1, focusAt: -9, focusKind: 0, hintLocked: new Set(), preview: null,
 };
 
 window.addEventListener('resize', () => renderer.resize());
@@ -719,6 +750,7 @@ function loop(now: number): void {
   scene.focusAt = focusAt;
   scene.focusKind = focusKind;
   scene.hintLocked = shown ? shown.hintLocked() : scene.hintLocked;
+  scene.preview = screen === 'replay' && playback ? playback.preview() : null;
   scene.ambient = screen === 'home' || screen === 'levels';
   scene.skyline = !shown ? 0.35 : wonAt >= 0 ? 1 : 0.06 + 0.5 * ((flow?.housesLit ?? 0) / Math.max(1, houses));
   scene.insetTop = hud.getBoundingClientRect().bottom;
@@ -738,7 +770,10 @@ if (new URLSearchParams(location.search).has('debug')) {
       state: () => ({
         screen, dom: app.dataset.screen, moves: shown?.moves, locked: shown?.locked.reduce((a, b) => a + b, 0),
         solved: flow?.solved, housesLit: flow?.housesLit, houses, par, elapsed, hints: game?.hints, log: game?.log.length,
-        playback: playback && { k: playback.k, n: playback.actions.length, playing: playback.playing, done: playback.done, speed: playback.speed },
+        playback: playback && {
+          k: playback.k, n: playback.actions.length, step: playback.step, steps: playback.steps,
+          playing: playback.playing, busy: playback.busy, done: playback.done, speed: playback.speed, preview: playback.preview(),
+        },
       }),
       /** Screen position and tap count for every tile that is off the generated solution. */
       plan(): [number, number, number][] {
