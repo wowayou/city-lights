@@ -1,6 +1,7 @@
 import './styles.css';
 import { Sfx } from './audio/sfx';
 import { Board, type Action, type Flow, type Origin } from './game/board';
+import { PlayClock } from './game/clock';
 import type { Puzzle } from './game/generate';
 import { period } from './game/grid';
 import { DAILY_SIZE, dailyNumber, dailyPuzzle, dateKey, formatTime, levelPuzzle, levelSize, rating, streak } from './game/modes';
@@ -39,8 +40,7 @@ let playback: Playback | null = null;
 let playbackKind: 'mine' | 'ref' = 'mine';
 let houses = 0;
 let par = 0;
-let elapsed = 0;
-let timing = false;
+const timer = new PlayClock();
 let wonAt = -1;
 let hover = -1;
 let cursor = -1;
@@ -57,7 +57,7 @@ let lockedToastShown = false;
 
 const text: [string, string][] = [
   ['.logo', t.title], ['.logo-sub', t.lang === 'en' ? '万家灯火' : 'CITY LIGHTS'], ['.tagline', t.tagline],
-  ['.howto', t.howto], ['.hint', t.hint], ['.daily-label', t.daily], ['.level-label', t.levels],
+  ['.howto', t.howto], ['.hint', t.hint], ['#board-help', t.boardHelp], ['.daily-label', t.daily], ['.level-label', t.levels],
   ['[data-action="level-select"]', t.allLevels], ['.levels-title', t.levelsTitle],
   ['.won-title', t.wonTitle], ['.time-label', t.timeLabel], ['.moves-label', t.movesLabel], ['.par-label', t.parLabel],
   ['.home-label', t.home], ['.undo-label', t.undo], ['.hint-label', t.hintBtn], ['.reset-label', t.reset],
@@ -72,14 +72,34 @@ const aria: [string, string][] = [
 for (const [sel, s] of aria) $(sel).setAttribute('aria-label', s);
 canvas.setAttribute('aria-label', t.aria.board);
 
+function updateStorageNotice(): void {
+  const notice = $('.storage-warning');
+  notice.hidden = store.persistent;
+  notice.textContent = store.persistent ? '' : t.storageSession;
+}
+store.subscribe(updateStorageNotice);
+updateStorageNotice();
+
 const lanternsHtml = (lit: number) => `${'🏮'.repeat(lit)}<span class="off">${'🏮'.repeat(5 - lit)}</span>`;
 
 // ---- screens -------------------------------------------------------------
 
-function setScreen(s: ScreenName): void {
+function setScreen(s: ScreenName, takeFocus = true): void {
+  cancelPress();
+  hover = cursor = -1;
   screen = s;
   app.dataset.screen = s;
+  const interactive = s === 'play' || s === 'replay';
+  canvas.tabIndex = interactive ? 0 : -1;
+  canvas.setAttribute('aria-hidden', String(!interactive));
+  timer.setActive(s === 'play' && !document.hidden);
   if (s === 'home') refreshHome();
+  if (takeFocus) {
+    const target = interactive ? canvas : s === 'won' ? $('.won-primary')
+      : s === 'levels' ? $('.level-cell.current') : $('[data-action="daily"]');
+    target?.focus({ preventScroll: true });
+    if (target?.matches(':focus-visible')) target.scrollIntoView({ block: 'nearest' });
+  }
 }
 
 function puzzleFor(m: Mode): Puzzle {
@@ -101,7 +121,8 @@ function refreshHome(): void {
   const saved = done ? null : store.save(`daily:${today}`, DAILY_SIZE[0] * DAILY_SIZE[1]);
   $('.daily-sub').textContent = done
     ? t.dailyDone(formatTime(done.time), streak((k) => k in daily, today))
-    : saved && saved.elapsed > 0 ? t.dailyResume(formatTime(saved.elapsed)) : t.dailySub(t.date(today), dailyNumber(today));
+    : saved && (saved.started || saved.elapsed > 0 || saved.log.length > 0 || saved.origin)
+      ? t.dailyResume(formatTime(saved.elapsed)) : t.dailySub(t.date(today), dailyNumber(today));
   const level = store.level();
   const [w, h] = levelSize(level);
   $('.level-sub').textContent = t.levelSub(level, w, h);
@@ -138,8 +159,8 @@ function open(m: Mode): void {
   houses = [...Array(fresh.size).keys()].filter((i) => fresh.isHouse(i)).length;
   wonAt = -1;
   hover = cursor = focus = -1;
-  timing = false;
-  elapsed = 0;
+  timer.setActive(false);
+  timer.restore();
   hintArmedAt = resetArmedAt = -Infinity;
   renderer.clearLanterns();
 
@@ -155,7 +176,7 @@ function open(m: Mode): void {
     // Results from before replays existed carry no log: show the reference solution instead.
     game = solved ?? new Board(p, { rot: new Uint8Array(fresh.size), locked: new Uint8Array(fresh.size), moves: done.moves });
     result = done;
-    elapsed = done.time;
+    timer.restore(done.time, true);
     par = done.par;
     show(game);
     wonAt = clock - 10;
@@ -171,8 +192,7 @@ function open(m: Mode): void {
     if (restored) {
       b = restored;
       b.hints = saved.hints;
-      elapsed = saved.elapsed;
-      timing = b.moves > 0;
+      timer.restore(saved.elapsed, saved.started ?? (saved.elapsed > 0 || b.moves > 0 || b.hints > 0));
     }
   }
   game = b;
@@ -193,7 +213,7 @@ function goHome(): void {
 function updateHud(): void {
   if (!mode || !shown) return;
   $('.hud-title').textContent = modeTitle(mode);
-  $('.hud-time').textContent = formatTime(elapsed);
+  $('.hud-time').textContent = formatTime(screen === 'won' && result ? result.time : timer.elapsed);
   $('.hud-moves').textContent = t.moves(shown.moves);
   if (game && screen === 'play') {
     $('[data-action="undo"]').setAttribute('aria-disabled', String(game.log.length === 0));
@@ -209,7 +229,8 @@ function persist(): void {
   const o = game.origin;
   store.setSave(saveId(mode), {
     log: encodeLog(game.log),
-    elapsed: Math.round(elapsed),
+    elapsed: Math.round(timer.elapsed),
+    started: timer.started,
     hints: game.hints,
     ...(o.rot === game.puzzle.start ? {} : { origin: { rot: Array.from(o.rot), locked: Array.from(o.locked), moves: o.moves } }),
   });
@@ -243,6 +264,7 @@ function showWon(): void {
   $('.won-extra').textContent = extra.join(' · ');
   $('[data-action="replay-mine"]').hidden = !myLog?.length;
   setScreen('won');
+  updateHud();
 }
 
 // ---- play ----------------------------------------------------------------
@@ -275,13 +297,13 @@ function act(i: number, lock: boolean): void {
   if (screen !== 'play' || !game || !anim || i < 0) return;
   sfx.unlock();
   if (lock) {
-    game.toggleLock(i, elapsed);
+    game.toggleLock(i, timer.elapsed);
     sfx.lock();
     navigator.vibrate?.(10);
     changed();
     return;
   }
-  if (!game.rotate(i, elapsed)) {
+  if (!game.rotate(i, timer.elapsed)) {
     sfx.lock();
     setFocus(i, 2);
     if (!lockedToastShown) {
@@ -291,7 +313,7 @@ function act(i: number, lock: boolean): void {
     return;
   }
   anim[i] -= Math.PI / 2;
-  timing = true;
+  timer.start();
   refresh('turn');
   changed();
 }
@@ -323,11 +345,11 @@ function hint(): void {
     hintConfirmed = true;
     hideToast();
   }
-  const taken = game.hint(elapsed);
+  const taken = game.hint(timer.elapsed);
   if (!taken) return;
   for (const a of taken) if (!a.lock) anim[a.i] -= Math.PI / 2;
   setFocus(taken[0].i, 1);
-  timing = true;
+  timer.start();
   sfx.hint();
   refresh('quiet');
   changed();
@@ -353,17 +375,19 @@ function reset(): void {
 function win(): void {
   if (!game || !flow || !mode) return;
   const m = mode;
-  timing = false;
+  timer.setActive(false);
   wonAt = clock;
   hover = cursor = -1;
   screen = 'won'; // blocks input; the card follows the wave of light
+  cancelPress();
+  canvas.tabIndex = -1;
   sfx.win();
   navigator.vibrate?.([12, 50, 12]);
   renderer.celebrate(game, flow);
   const fromStart = game.origin.rot === game.puzzle.start;
   myLog = game.log.slice();
   myOrigin = fromStart ? undefined : game.origin;
-  result = { time: Math.round(elapsed), moves: game.moves, par, hints: game.hints, ...(fromStart ? { log: encodeLog(game.log) } : {}) };
+  result = { time: Math.round(timer.elapsed), moves: game.moves, par, hints: game.hints, ...(fromStart ? { log: encodeLog(game.log) } : {}) };
   store.setSave(saveId(m), undefined);
   if (m.kind === 'daily') store.setDaily(m.key, result);
   else {
@@ -425,6 +449,7 @@ function closePlayback(): void {
   wonAt = clock - 10;
   focus = -1;
   setScreen('won');
+  updateHud();
 }
 
 /** After the playback board was rebuilt (seek / previous step). */
@@ -585,7 +610,6 @@ app.addEventListener('click', (e) => {
       closePlayback();
       break;
   }
-  btn.blur();
 });
 
 $('.player-seek').addEventListener('input', (e) => {
@@ -598,65 +622,99 @@ interface Press {
   i: number;
   x: number;
   y: number;
+  board: Board;
+  screen: 'play' | 'replay';
   timer: number;
   fired: boolean;
 }
 let press: Press | null = null;
 
 function cancelPress(): void {
-  if (press) window.clearTimeout(press.timer);
+  const p = press;
   press = null;
+  if (!p) return;
+  window.clearTimeout(p.timer);
+  if (canvas.hasPointerCapture(p.id)) canvas.releasePointerCapture(p.id);
 }
 
 canvas.addEventListener('pointerdown', (e) => {
-  if (screen === 'replay' && e.button === 0) {
-    sfx.unlock();
-    playbackNext();
+  // A second finger cancels the gesture; it must not steal the first finger's long press.
+  if (!e.isPrimary) {
+    cancelPress();
     return;
   }
-  if (screen !== 'play' || !game) return;
-  const i = renderer.hit(game, e.clientX, e.clientY);
-  if (i < 0) return;
+  if ((screen !== 'play' && screen !== 'replay') || !shown) return;
+  const i = renderer.hit(shown, e.clientX, e.clientY);
+  if (i < 0 || (e.button !== 0 && e.button !== 2)) return;
+  cancelPress();
+  e.preventDefault();
+  canvas.focus({ preventScroll: true });
   cursor = -1;
   if (e.button === 2) {
-    act(i, true);
+    if (screen === 'play') act(i, true);
     return;
   }
-  if (e.button !== 0) return;
-  cancelPress();
-  const p: Press = { id: e.pointerId, i, x: e.clientX, y: e.clientY, timer: 0, fired: false };
-  p.timer = window.setTimeout(() => {
+  const p: Press = { id: e.pointerId, i, x: e.clientX, y: e.clientY, board: shown, screen, timer: 0, fired: false };
+  press = p;
+  canvas.setPointerCapture(e.pointerId);
+  if (screen === 'play') p.timer = window.setTimeout(() => {
+    if (press !== p || screen !== p.screen || shown !== p.board) return;
     p.fired = true;
     act(p.i, true);
   }, 430);
-  press = p;
 });
 
 canvas.addEventListener('pointermove', (e) => {
-  if (game && screen === 'play' && e.pointerType === 'mouse') hover = renderer.hit(game, e.clientX, e.clientY);
-  if (press && press.id === e.pointerId && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 14) cancelPress();
+  if (shown && screen === 'play' && e.pointerType === 'mouse') hover = renderer.hit(shown, e.clientX, e.clientY);
+  if (press && press.id === e.pointerId && (Math.hypot(e.clientX - press.x, e.clientY - press.y) > 14
+    || renderer.hit(press.board, e.clientX, e.clientY) !== press.i)) cancelPress();
 });
 
 canvas.addEventListener('pointerup', (e) => {
   if (!press || press.id !== e.pointerId) return;
   const p = press;
   cancelPress();
-  if (!p.fired && game && renderer.hit(game, e.clientX, e.clientY) === p.i) act(p.i, false);
+  if (p.fired || screen !== p.screen || shown !== p.board || renderer.hit(p.board, e.clientX, e.clientY) !== p.i) return;
+  if (screen === 'replay') {
+    sfx.unlock();
+    playbackNext();
+  } else act(p.i, false);
 });
 
-canvas.addEventListener('pointercancel', cancelPress);
-canvas.addEventListener('pointerleave', () => {
-  hover = -1;
+for (const event of ['pointercancel', 'lostpointercapture'] as const) canvas.addEventListener(event, (e) => {
+  if (press?.id === e.pointerId) cancelPress();
 });
+canvas.addEventListener('pointerleave', () => { hover = -1; });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+canvas.addEventListener('focus', () => {
+  if (screen === 'play' && game && canvas.matches(':focus-visible')) cursor = game.puzzle.source;
+});
+canvas.addEventListener('blur', () => {
+  cursor = -1;
+  cancelPress();
+});
+window.addEventListener('blur', cancelPress);
 
 window.addEventListener('keydown', (e) => {
-  if ((e.target as HTMLElement).closest?.('input')) return;
+  if (e.defaultPrevented || e.isComposing || e.altKey || e.ctrlKey || e.metaKey) return;
   const key = e.key.toLowerCase();
+  if (key === 'escape' && screen !== 'home') {
+    e.preventDefault();
+    if (screen === 'replay') closePlayback();
+    else goHome();
+    return;
+  }
+  // Buttons and the seek slider own their native Enter/Space/arrow keys.
+  // Board shortcuts only apply when the board itself has keyboard focus.
+  if ((e.target as HTMLElement).closest?.('input, select, textarea, [contenteditable]')) return;
+  if (e.repeat && !key.startsWith('arrow')) return;
   if (key === 'm') {
+    cancelPress();
     toggleSound();
     return;
   }
+  if (e.target !== canvas) return;
+  cancelPress();
   if (screen === 'replay' && playback) {
     if (key === ' ') {
       e.preventDefault();
@@ -668,11 +726,7 @@ window.addEventListener('keydown', (e) => {
       e.preventDefault();
       playback.prev();
       rebuilt();
-    } else if (key === 'escape') closePlayback();
-    return;
-  }
-  if (key === 'escape' && screen !== 'home') {
-    goHome();
+    }
     return;
   }
   if (screen !== 'play' || !game) return;
@@ -698,7 +752,7 @@ window.addEventListener('keydown', (e) => {
     }
     return;
   }
-  if (cursor < 0) return;
+  if (cursor < 0) cursor = source;
   if (key === ' ' || key === 'enter') {
     e.preventDefault();
     act(cursor, false);
@@ -708,9 +762,18 @@ window.addEventListener('keydown', (e) => {
 });
 
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) persist();
+  timer.setActive(screen === 'play' && !document.hidden);
+  if (document.hidden) {
+    cancelPress();
+    persist();
+  }
 });
-window.addEventListener('pagehide', persist);
+window.addEventListener('pagehide', () => {
+  cancelPress();
+  timer.setActive(false);
+  persist();
+});
+window.addEventListener('pageshow', () => timer.setActive(screen === 'play' && !document.hidden));
 
 // ---- loop ----------------------------------------------------------------
 
@@ -718,12 +781,27 @@ const hud = $('.hud');
 const bottomUi: Partial<Record<ScreenName, HTMLElement>> = { play: $('.playbar'), won: $('.card'), replay: $('.player') };
 const scene: Scene = {
   board: null, flow: null, anim: null, hover: -1, cursor: -1, wonAt: -1,
-  insetTop: 0, insetBottom: 0, skyline: 0.35, ambient: true,
+  bounds: { x: 0, y: 0, width: 0, height: 0 }, skyline: 0.35, ambient: true,
   focus: -1, focusAt: -9, focusKind: 0, hintLocked: new Set(), preview: null,
 };
 
-window.addEventListener('resize', () => renderer.resize());
+const safeArea = { top: 0, right: 0, bottom: 0, left: 0 };
+function measureUi(): void {
+  const style = getComputedStyle(app);
+  for (const edge of ['top', 'right', 'bottom', 'left'] as const) safeArea[edge] = parseFloat(style.getPropertyValue(`--safe-${edge}`)) || 0;
+  app.style.setProperty('--hud-bottom', `${hud.getBoundingClientRect().bottom}px`);
+}
+new ResizeObserver(() => {
+  cancelPress();
+  measureUi();
+}).observe(hud);
+window.addEventListener('resize', () => {
+  cancelPress();
+  renderer.resize();
+  measureUi();
+});
 renderer.resize();
+measureUi();
 
 let last = performance.now();
 let shownSecond = -1;
@@ -731,12 +809,11 @@ function loop(now: number): void {
   const dt = Math.min(0.1, Math.max(0, (now - last) / 1000));
   last = now;
   clock += dt;
-  if (screen === 'play' && timing) {
-    elapsed += dt * 1000;
-    const sec = Math.floor(elapsed / 1000);
+  if (screen === 'play' && timer.started) {
+    const sec = Math.floor(timer.elapsed / 1000);
     if (sec !== shownSecond) {
       shownSecond = sec;
-      $('.hud-time').textContent = formatTime(elapsed);
+      $('.hud-time').textContent = formatTime(timer.elapsed);
     }
   }
   if (screen === 'replay') stepPlayback(dt * 1000);
@@ -753,13 +830,18 @@ function loop(now: number): void {
   scene.preview = screen === 'replay' && playback ? playback.preview() : null;
   scene.ambient = screen === 'home' || screen === 'levels';
   scene.skyline = !shown ? 0.35 : wonAt >= 0 ? 1 : 0.06 + 0.5 * ((flow?.housesLit ?? 0) / Math.max(1, houses));
-  scene.insetTop = hud.getBoundingClientRect().bottom;
+  const header = hud.getBoundingClientRect();
+  // CSS puts the HUD and panels in one right-hand rail on short landscape screens.
+  const side = header.left > safeArea.left + 1;
   const bottom = bottomUi[app.dataset.screen as ScreenName];
-  scene.insetBottom = bottom ? window.innerHeight - bottom.getBoundingClientRect().top + 4 : 40;
+  const x = safeArea.left, y = side ? safeArea.top : header.bottom;
+  const right = side ? header.left : renderer.w - safeArea.right;
+  const floor = !side && bottom ? Math.min(renderer.h - safeArea.bottom, bottom.getBoundingClientRect().top - 4) : renderer.h - safeArea.bottom;
+  scene.bounds = { x, y, width: Math.max(0, right - x), height: Math.max(0, floor - y) };
   renderer.frame(scene, clock, dt);
   requestAnimationFrame(loop);
 }
-setScreen('home');
+setScreen('home', false);
 requestAnimationFrame(loop);
 
 // ---- headless verification hook (?debug) ---------------------------------
@@ -769,7 +851,9 @@ if (new URLSearchParams(location.search).has('debug')) {
     __cl: {
       state: () => ({
         screen, dom: app.dataset.screen, moves: shown?.moves, locked: shown?.locked.reduce((a, b) => a + b, 0),
-        solved: flow?.solved, housesLit: flow?.housesLit, houses, par, elapsed, hints: game?.hints, log: game?.log.length,
+        board: shown && { w: shown.puzzle.w, h: shown.puzzle.h, rot: Array.from(shown.rot), locked: Array.from(shown.locked) },
+        view: { ...renderer.view }, bounds: { ...scene.bounds }, persistent: store.persistent,
+        solved: flow?.solved, housesLit: flow?.housesLit, houses, par, elapsed: timer.elapsed, started: timer.started, hints: game?.hints, log: game?.log.length,
         playback: playback && {
           k: playback.k, n: playback.actions.length, step: playback.step, steps: playback.steps,
           playing: playback.playing, busy: playback.busy, done: playback.done, speed: playback.speed, preview: playback.preview(),

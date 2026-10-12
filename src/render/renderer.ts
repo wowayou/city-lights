@@ -1,5 +1,6 @@
 import type { Board, Flow } from '../game/board';
 import { DIRS, E, N, S, W, degree } from '../game/grid';
+import { fitBoard, type Bounds, type View } from './layout';
 
 const VEC: Record<number, readonly [number, number]> = { [N]: [0, -1], [E]: [1, 0], [S]: [0, 1], [W]: [-1, 0] };
 const ROOFS = ['#b4533f', '#4a6fa8', '#5a8f63', '#a77b4f', '#7d5aa6', '#3f8f8f'];
@@ -24,12 +25,6 @@ const C = {
   bolt: '#3b2608',
 };
 
-export interface View {
-  cell: number;
-  ox: number;
-  oy: number;
-}
-
 export interface Scene {
   board: Board | null;
   flow: Flow | null;
@@ -39,8 +34,8 @@ export interface Scene {
   cursor: number;
   /** Seconds timestamp of the solve, or -1. */
   wonAt: number;
-  insetTop: number;
-  insetBottom: number;
+  /** Board area after reserving the HUD, panels and device safe areas. */
+  bounds: Bounds;
   /** 0..1 share of skyline windows that should be lit. */
   skyline: number;
   ambient: boolean;
@@ -143,21 +138,9 @@ export class Renderer {
     this.viewFor = null;
   }
 
-  private targetView(board: Board, top: number, bottom: number): View {
-    const { w, h } = board.puzzle;
-    const pad = 18;
-    const availW = this.w - pad * 2;
-    const availH = Math.max(80, this.h - top - bottom - pad * 2);
-    const cell = Math.floor(Math.min(availW / w, availH / h, 92));
-    return {
-      cell,
-      ox: Math.round((this.w - cell * w) / 2),
-      oy: Math.round(top + pad + (availH - cell * h) / 2),
-    };
-  }
-
   hit(board: Board, x: number, y: number): number {
     const { cell, ox, oy } = this.view;
+    if (this.viewFor !== board || cell < 4) return -1;
     const cx = Math.floor((x - ox) / cell), cy = Math.floor((y - oy) / cell);
     const { w, h } = board.puzzle;
     return cx >= 0 && cy >= 0 && cx < w && cy < h ? cy * w + cx : -1;
@@ -194,7 +177,7 @@ export class Renderer {
 
     const { board, flow, anim } = scene;
     if (board && flow && anim) {
-      const target = this.targetView(board, scene.insetTop, scene.insetBottom);
+      const target = fitBoard(board.puzzle.w, board.puzzle.h, scene.bounds);
       if (this.viewFor !== board) {
         this.view = target;
         this.viewFor = board;
@@ -210,7 +193,7 @@ export class Renderer {
         anim[i] *= Math.exp(-dt * 20);
         if (Math.abs(anim[i]) < 0.003) anim[i] = 0;
       }
-      this.drawBoard(scene, board, flow, anim, t);
+      if (this.view.cell >= 4) this.drawBoard(scene, board, flow, anim, t);
     }
 
     this.drawLanterns(scene.ambient, dt);

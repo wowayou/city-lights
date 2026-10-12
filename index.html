@@ -14,7 +14,8 @@
   </head>
   <body>
     <main id="app" data-screen="home">
-      <canvas id="stage" role="img"></canvas>
+      <canvas id="stage" role="group" tabindex="-1" aria-describedby="board-help"></canvas>
+      <p id="board-help" class="sr-only"></p>
 
       <header class="hud">
         <button type="button" class="icon-btn play-only" data-action="home">
@@ -28,6 +29,7 @@
           <svg class="icon-on" viewBox="0 0 24 24" aria-hidden="true"><path class="fill" d="M4 9.5h3.2L12 5.4v13.2l-4.8-4.1H4z" /><path d="M15.5 9a4.2 4.2 0 0 1 0 6M18 6.6a7.6 7.6 0 0 1 0 10.8" /></svg>
           <svg class="icon-off" viewBox="0 0 24 24" aria-hidden="true"><path class="fill" d="M4 9.5h3.2L12 5.4v13.2l-4.8-4.1H4z" /><path d="M15.5 9.5l5 5M20.5 9.5l-5 5" /></svg>
         </button>
+        <p class="storage-warning" role="status" hidden></p>
       </header>
 
       <div class="playbar">

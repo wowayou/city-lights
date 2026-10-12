@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Board } from '../src/game/board';
 import { DAILY_SIZE, dailyNumber, dailyPuzzle, dateKey, formatTime, lanterns, levelPuzzle, levelSize, rating, shiftKey, streak } from '../src/game/modes';
-import { store } from '../src/storage';
+import { createStore } from '../src/storage';
 
 describe('daily', () => {
   it('numbers days from the launch date across month and year ends', () => {
@@ -62,6 +62,8 @@ describe('scoring', () => {
 });
 
 describe('storage', () => {
+  let store: ReturnType<typeof createStore>;
+  beforeEach(() => { store = createStore(); });
   afterEach(() => vi.unstubAllGlobals());
   const fake = (data: Record<string, string> = {}) => ({
     getItem: (k: string) => data[k] ?? null,
@@ -69,15 +71,58 @@ describe('storage', () => {
     removeItem: (k: string) => { delete data[k]; },
   });
 
-  it('falls back to defaults when storage throws or holds garbage', () => {
+  it('keeps session progress and results when storage is blocked, and reports the limitation', () => {
     vi.stubGlobal('localStorage', { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } });
+    const changed = vi.fn();
+    store.subscribe(changed);
     expect(store.level()).toBe(1);
     expect(store.muted()).toBe(false);
+    expect(store.persistent).toBe(false);
     store.setLevel(5);
+    store.setMuted(true);
+    store.setDaily('2026-10-04', { time: 1000, moves: 10, par: 10 });
+    store.setLevelResult(4, { time: 1000, moves: 10, par: 10 });
+    expect(store.level()).toBe(5);
+    expect(store.muted()).toBe(true);
+    expect(store.daily()['2026-10-04'].moves).toBe(10);
+    expect(store.levels()[4].moves).toBe(10);
+    expect(changed).toHaveBeenCalledTimes(1);
+  });
+  it('rejects corrupt data without calling it a storage failure', () => {
     vi.stubGlobal('localStorage', fake({ 'city-lights:v1:level': '"x"', 'city-lights:v1:daily': '{"2026-10-04":{"time":"no"}}', 'city-lights:v1:muted': '{' }));
     expect(store.level()).toBe(1);
     expect(store.daily()).toEqual({});
     expect(store.muted()).toBe(false);
+    expect(store.persistent).toBe(true);
+  });
+  it('never replaces a failed save or deletion with the older disk value, and retries on recovery', () => {
+    const disk = fake();
+    let blocked = false;
+    store = createStore(() => ({
+      getItem: disk.getItem,
+      setItem: (k, v) => { if (blocked) throw new Error('quota'); disk.setItem(k, v); },
+      removeItem: (k) => { if (blocked) throw new Error('blocked'); disk.removeItem(k); },
+    }));
+    const old = { log: [0, 0], elapsed: 500, hints: 0, started: true };
+    const recent = { ...old, log: [0, 0, 4, 500], elapsed: 1000 };
+    store.setSave('level:1', old);
+    store.setSave('level:2', old);
+    blocked = true;
+    store.setSave('level:1', recent);
+    store.setSave('level:2', undefined);
+    expect(store.save('level:1', 9)).toEqual(recent);
+    expect(store.save('level:2', 16)).toBeNull();
+    expect(store.persistent).toBe(false);
+    // Even a successful read of another key must not hide pending failed writes.
+    expect(store.level()).toBe(1);
+    expect(store.persistent).toBe(false);
+    blocked = false;
+    store.setMuted(true);
+    expect(store.persistent).toBe(true);
+    const reloaded = createStore(() => disk);
+    expect(reloaded.save('level:1', 9)).toEqual(recent);
+    expect(reloaded.save('level:2', 16)).toBeNull();
+    expect(reloaded.muted()).toBe(true);
   });
   it('round-trips results and rejects saves that do not fit the board', () => {
     vi.stubGlobal('localStorage', fake());
@@ -85,7 +130,7 @@ describe('storage', () => {
     store.setDaily('2026-10-05', { time: 2000, moves: 31, par: 25, hints: 1, log: [4, 0, 5, 120] });
     expect(Object.keys(store.daily())).toEqual(['2026-10-04', '2026-10-05']);
     expect(store.daily()['2026-10-05'].log).toEqual([4, 0, 5, 120]);
-    const save = { log: [4, 0, 8, 300], elapsed: 500, hints: 0 };
+    const save = { log: [4, 0, 8, 300], elapsed: 500, hints: 0, started: true };
     store.setSave('level:2', save);
     expect(store.save('level:2', 4)).toEqual(save);
     expect(store.save('level:2', 9)).toEqual(save); // the log is checked against the board when decoded
@@ -93,6 +138,10 @@ describe('storage', () => {
     expect(store.save('level:2', 9)).toBeNull();
     store.setSave('level:2', undefined);
     expect(store.save('level:2', 4)).toBeNull();
+  });
+  it('rejects an invalid saved clock state', () => {
+    vi.stubGlobal('localStorage', fake({ 'city-lights:v1:save:level:1': JSON.stringify({ log: [], elapsed: 1, hints: 0, started: 'yes' }) }));
+    expect(store.save('level:1', 9)).toBeNull();
   });
   it('upgrades a first-release save (positions, no log) into an origin', () => {
     vi.stubGlobal('localStorage', fake({ 'city-lights:v1:save:daily:2026-10-04': JSON.stringify({ rot: [0, 1, 2, 3], locked: [0, 0, 1, 0], moves: 3, elapsed: 500 }) }));
