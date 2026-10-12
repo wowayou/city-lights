@@ -1,6 +1,6 @@
 // Drives the production build in headless Chromium over CDP (no npm deps):
 // real clicks on the board and on buttons, long-press lock, undo, hints,
-// replays and the reference demo, level select, daily persistence; screenshots.
+// replays, persistence, input cancellation and small/landscape layouts; screenshots.
 // Usage: npm run build && [SHOT_LANG=zh-CN] [BASE=https://…/] node tools/shots.mjs <outDir>
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -13,7 +13,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // BASE=<url> checks a deployed site instead of a local `vite preview`.
 const BASE = process.env.BASE ?? 'http://localhost:4199/';
-const server = process.env.BASE ? null : spawn('npx', ['vite', 'preview', '--port', '4199', '--strictPort'], { stdio: 'ignore' });
+const server = process.env.BASE ? null : spawn(process.execPath, ['node_modules/vite/bin/vite.js', 'preview', '--port', '4199', '--strictPort'], { stdio: 'ignore' });
 const chrome = spawn(CHROME, ['--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--remote-debugging-port=9333', '--user-data-dir=/tmp/cl-chrome-' + process.pid, 'about:blank'], { stdio: 'ignore' });
 const failures = [];
 const check = (ok, msg) => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${msg}`); if (!ok) failures.push(msg); };
@@ -35,8 +35,21 @@ try {
     if (msg.method === 'Runtime.exceptionThrown') errors.push(msg.params.exceptionDetails.exception?.description ?? 'exception');
     if (msg.method === 'Runtime.consoleAPICalled' && msg.params.type === 'error') errors.push(JSON.stringify(msg.params.args.map((a) => a.value)));
   });
-  const send = (method, params = {}) => new Promise((r) => { const i = ++id; pending.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
-  const evaluate = async (expr) => (await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })).result?.result?.value;
+  const send = (method, params = {}) => new Promise((resolve, reject) => {
+    const i = ++id;
+    const timer = setTimeout(() => { pending.delete(i); reject(new Error(`CDP timeout: ${method}`)); }, 15000);
+    pending.set(i, (msg) => {
+      clearTimeout(timer);
+      if (msg.error) reject(new Error(`${method}: ${JSON.stringify(msg.error)}`));
+      else resolve(msg);
+    });
+    ws.send(JSON.stringify({ id: i, method, params }));
+  });
+  const evaluate = async (expr) => {
+    const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
+    if (r.result?.exceptionDetails) throw new Error(`Evaluation failed: ${JSON.stringify(r.result.exceptionDetails)}`);
+    return r.result?.result?.value;
+  };
   const state = () => evaluate('__cl.state()');
   const shot = async (name) => { const r = await send('Page.captureScreenshot', { format: 'png' }); writeFileSync(`${out}/${name}.png`, Buffer.from(r.result.data, 'base64')); };
   const click = async ([x, y], hold = 40) => {
@@ -46,7 +59,15 @@ try {
   };
   /** Real mouse click in the middle of a visible element. */
   const press = async (sel) => {
-    const c = await evaluate(`(() => { const el = [...document.querySelectorAll(${JSON.stringify(sel)})].find((e) => e.offsetParent || e.getClientRects().length); if (!el) return null; const r = el.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    const c = await evaluate(`(async () => {
+      const el = [...document.querySelectorAll(${JSON.stringify(sel)})].find((e) => e.getClientRects().length);
+      if (!el) return null;
+      el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      await new Promise(requestAnimationFrame); // measure the painted scroll position
+      const r = el.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2;
+      if (!el.contains(document.elementFromPoint(x, y))) throw new Error('Button is obscured: ' + ${JSON.stringify(sel)});
+      return [x, y];
+    })()`);
     if (!c) throw new Error(`no visible ${sel}`);
     await click(c);
     await sleep(150);
@@ -60,7 +81,7 @@ try {
     for (const end = Date.now() + ms; Date.now() < end; await sleep(100)) if (await evaluate(expr)) return true;
     return false;
   };
-  /** Waits for the result card and its rise animation, so its buttons are where they will stay. */
+  /** Waits for the result card and its entrance fade before taking a screenshot. */
   const waitWon = async (ms) => (await waitFor(`__cl.state().dom === 'won'`, ms)) && (await sleep(600), true);
   await send('Runtime.enable');
   await send('Page.enable');
@@ -211,7 +232,13 @@ try {
     s = await state();
     check(s.playback.n === before.moves + n && s.playback.k > 0, `${label}: daily replay plays the stored solve (${s.playback.k}/${s.playback.n})`);
     await press('[data-action=pb-close]');
+    const boxBefore = await evaluate('document.querySelector("[data-action=replay-ref]").getBoundingClientRect().toJSON()');
+    await sleep(40);
+    const boxAfter = await evaluate('document.querySelector("[data-action=replay-ref]").getBoundingClientRect().toJSON()');
+    check(boxBefore.y === boxAfter.y && boxBefore.height === boxAfter.height, `${label}: result buttons stay stationary during a rapid replay switch`);
     await press('[data-action=replay-ref]');
+    s = await state();
+    check(s.dom === 'replay' && s.playback?.step === 0, `${label}: quickly switching from replay back to the reference actually opens it`);
     await sleep(400);
     await shot(`${label}-08-reference-step0`);
     for (let k = 0; k < 6; k++) {
@@ -236,6 +263,316 @@ try {
     await press('[data-action=replay-mine]');
     s = await state();
     check(s.playback.k === 0 && s.moves === 7, `${label}: its replay starts from the saved position`);
+  }
+
+  // ---- regression: active time and interruptions
+  const dimensions = async (width, height, mobile = true) => {
+    await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile });
+    await sleep(300);
+  };
+  const reload = async () => {
+    await send('Page.reload');
+    await sleep(500);
+    if (!(await waitFor(`document.readyState === 'complete' && !!window.__cl`, 5000))) throw new Error('App did not load');
+  };
+  const fresh = async () => {
+    // Leave play first: otherwise pagehide legitimately re-saves the board after the fixture is cleared.
+    await evaluate('document.querySelector(".hud [data-action=home]").click(); localStorage.clear();');
+    await reload();
+  };
+  const key = async (key, modifiers = 0, autoRepeat = false) => {
+    const codes = { Enter: 13, Escape: 27, Tab: 9, ' ': 32, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40 };
+    const params = { key, code: key === ' ' ? 'Space' : key.length === 1 ? `Key${key.toUpperCase()}` : key,
+      windowsVirtualKeyCode: codes[key] ?? key.toUpperCase().charCodeAt(0), modifiers };
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', ...params, autoRepeat,
+      text: !modifiers && (key === 'Enter' || key.length === 1) ? key === 'Enter' ? '\r' : key : undefined });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', ...params });
+    await sleep(60);
+  };
+  const mouse = (type, [x, y], button = 'left') => send('Input.dispatchMouseEvent', { type, x, y, button, buttons: type === 'mouseReleased' ? 0 : button === 'right' ? 2 : 1, clickCount: 1 });
+  const sameBoard = (a, b) => JSON.stringify(a.board) === JSON.stringify(b.board) && a.moves === b.moves && a.log === b.log;
+
+  await dimensions(390, 844);
+  await fresh();
+  await press('[data-action=levels]');
+  await sleep(350);
+  check((await state()).elapsed === 0, 'clock: observing a new board does not start time');
+  await click(await evaluate('__cl.cell(4)'), 600);
+  check((await state()).elapsed === 0 && (await state()).locked === 1, 'clock: a lock alone does not start time');
+  await press('[data-action=undo]');
+  await click(await evaluate('__cl.cell(4)'));
+  await sleep(250);
+  await press('[data-action=undo]');
+  await press('.hud [data-action=home]');
+  await press('[data-action=levels]');
+  let before = await state();
+  await sleep(400);
+  let after = await state();
+  check(after.moves === 0 && after.started && after.elapsed - before.elapsed >= 350, 'clock: returning after undo to zero moves keeps time running');
+  await reload();
+  await press('[data-action=levels]');
+  before = await state();
+  await sleep(350);
+  check((await state()).elapsed - before.elapsed >= 300, 'clock: zero-move started state also survives a reload');
+  await click(await evaluate('__cl.cell(4)'));
+  await press('[data-action=reset]');
+  check((await state()).moves === 1, 'clock: restart still needs confirmation');
+  await press('[data-action=reset]');
+  await reload();
+  await press('[data-action=levels]');
+  before = await state();
+  await sleep(350);
+  after = await state();
+  check(after.moves === 0 && after.started && after.elapsed - before.elapsed >= 300, 'clock: restarting and reloading does not reset or stop the clock');
+  const stallBefore = after.elapsed;
+  const stallAfter = await evaluate(`(() => { const end = performance.now() + 450; while (performance.now() < end) {} return __cl.state().elapsed; })()`);
+  check(stallAfter - stallBefore >= 440, 'clock: a 450ms foreground stall is counted, not clipped to an animation frame');
+
+  // A real second tab hides/blurs this one while a press is pending.
+  const heldCell = await evaluate('__cl.cell(4)');
+  const heldBoard = await state();
+  await mouse('mousePressed', heldCell);
+  const other = await send('Target.createTarget', { url: 'about:blank' });
+  await send('Target.activateTarget', { targetId: other.result.targetId });
+  check(await waitFor('document.hidden', 3000), 'clock: test tab really became hidden');
+  const hiddenAt = (await state()).elapsed;
+  await sleep(650);
+  check(Math.abs((await state()).elapsed - hiddenAt) < 30, 'clock: background time is excluded');
+  await send('Target.closeTarget', { targetId: other.result.targetId });
+  await send('Page.bringToFront');
+  await waitFor('!document.hidden', 3000);
+  await mouse('mouseReleased', heldCell);
+  check(sameBoard(heldBoard, await state()), 'input: hiding/blurring the window cancels a pending long press');
+  const visibleAt = (await state()).elapsed;
+  await sleep(350);
+  check((await state()).elapsed - visibleAt >= 300, 'clock: returning to the tab resumes active time');
+
+  // ---- regression: focus ownership, pointer capture and real touch events
+  await fresh();
+  await press('[data-action=levels]');
+  check(await evaluate('document.activeElement.id === "stage"'), 'keyboard: entering a game focuses the board');
+  await key('ArrowRight');
+  await key('Enter');
+  check((await state()).moves === 1, 'keyboard: arrows and Enter operate the focused board');
+  await key('z', 2); // Ctrl+Z belongs to the browser, not the game.
+  check((await state()).moves === 1, 'keyboard: modified shortcuts do not change the board');
+  for (let k = 0; k < 3; k++) await key('Tab');
+  check(await evaluate('document.activeElement.dataset.action === "undo"'), 'keyboard: Tab reaches the real undo button');
+  await key('Enter');
+  check((await state()).moves === 0 && await evaluate('document.activeElement.dataset.action === "undo"'), 'keyboard: Enter activates Undo, never rotates a tile or drops focus');
+  const soundBefore = await evaluate('document.querySelector("[data-action=sound]").getAttribute("aria-pressed")');
+  await key('m');
+  check(await evaluate('document.querySelector("[data-action=sound]").getAttribute("aria-pressed")') !== soundBefore && (await state()).moves === 0, 'keyboard: M still toggles sound while a button is focused');
+
+  const cell = await evaluate('__cl.cell(4)');
+  before = await state();
+  await mouse('mousePressed', cell);
+  await key('Escape');
+  await key('Tab'); // daily → levels on the home screen
+  await key('Enter');
+  await sleep(600);
+  await mouse('mouseReleased', cell);
+  check((await state()).screen === 'play' && sameBoard(before, await state()), 'input: an old long press cannot lock a reopened board');
+
+  before = await state();
+  await mouse('mousePressed', cell);
+  await mouse('mouseMoved', [20, 20]);
+  await sleep(550);
+  await mouse('mouseReleased', [20, 20]);
+  check((await state()).screen === 'play' && sameBoard(before, await state()), 'input: dragging onto the HUD neither turns nor locks nor activates a button');
+  await mouse('mousePressed', cell);
+  await dimensions(844, 390);
+  await sleep(500);
+  await mouse('mouseReleased', cell);
+  check(sameBoard(before, await state()), 'input: resizing cancels a pending gesture without changing the board');
+  await dimensions(390, 844);
+
+  await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 });
+  const touchCell = await evaluate('__cl.cell(4)');
+  const point = { id: 1, x: touchCell[0], y: touchCell[1], radiusX: 2, radiusY: 2, force: 1 };
+  const touch = (type, touchPoints = []) => send('Input.dispatchTouchEvent', { type, touchPoints });
+  before = await state();
+  await touch('touchStart', [point]);
+  await sleep(50);
+  await touch('touchEnd');
+  check((await state()).moves === before.moves + 1, 'touch: a real finger tap turns exactly once');
+  await touch('touchStart', [point]);
+  await sleep(600);
+  await touch('touchEnd');
+  after = await state();
+  check(after.locked === 1 && after.moves === before.moves + 1, 'touch: a real hold locks without an extra turn');
+  await press('[data-action=undo]');
+  before = await state();
+  await touch('touchStart', [point]);
+  await touch('touchMove', [{ ...point, x: point.x + 30 }]);
+  await sleep(550);
+  await touch('touchEnd');
+  check(sameBoard(before, await state()), 'touch: dragging cancels both the tap and the hold');
+  await touch('touchStart', [point]);
+  await touch('touchCancel');
+  await sleep(550);
+  check(sameBoard(before, await state()), 'touch: pointer cancellation clears the hold timer');
+  await touch('touchStart', [point]);
+  await touch('touchStart', [point, { ...point, id: 2, x: point.x + 30 }]);
+  await sleep(550);
+  await touch('touchEnd');
+  check(sameBoard(before, await state()), 'touch: a second finger cannot steal or complete the first gesture');
+  await send('Emulation.setTouchEmulationEnabled', { enabled: false });
+  await mouse('mousePressed', touchCell, 'right');
+  await mouse('mouseReleased', touchCell, 'right');
+  check((await state()).locked === 1, 'input: right-click still locks a tile');
+  await mouse('mousePressed', touchCell, 'right');
+  await mouse('mouseReleased', touchCell, 'right');
+  await key('l');
+  await key('l', 0, true);
+  check((await state()).locked === 1, 'keyboard: held lock key does not repeatedly toggle');
+  await key('l');
+
+  // ---- regression: failed writes never restore an older disk snapshot
+  await fresh();
+  await press('[data-action=levels]');
+  await click(await evaluate('__cl.cell(4)'));
+  await evaluate(`window.__storageSetItem = Storage.prototype.setItem; Storage.prototype.setItem = function() { throw new DOMException('quota', 'QuotaExceededError'); };`);
+  await click(await evaluate('__cl.cell(4)'));
+  before = await state();
+  check(!before.persistent && await evaluate('!document.querySelector(".storage-warning").hidden'), 'storage: failed writes show a persistent warning');
+  await shot('storage-session-warning');
+  await press('.hud [data-action=home]');
+  await press('[data-action=levels]');
+  check(sameBoard(before, await state()), 'storage: returning home cannot replace newer session progress with the old disk save');
+  await solveByTaps();
+  check(await waitWon(5000), 'storage: a puzzle can still be finished while writes fail');
+  await press('.won-screen [data-action=home]');
+  await press('[data-action=level-select]');
+  check(await evaluate('document.querySelectorAll(".level-cell").length === 2 && document.querySelector(".level-cell.cleared .mini").textContent.includes("🏮")'), 'storage: session-only wins still unlock levels and keep the result');
+  await evaluate('Storage.prototype.setItem = window.__storageSetItem; delete window.__storageSetItem;');
+  await press('[data-action=sound]'); // also retries all pending saves/results/deletions
+  check((await state()).persistent && await evaluate('document.querySelector(".storage-warning").hidden'), 'storage: successful retry clears the warning only after pending writes are saved');
+  await reload();
+  await press('[data-action=level-select]');
+  check(await evaluate('document.querySelectorAll(".level-cell").length === 2 && document.querySelector(".level-cell.cleared .mini").textContent.includes("🏮")'), 'storage: recovered results survive reload');
+  await press('.level-cell.cleared');
+  check((await state()).moves === 0, 'storage: a recovered deletion does not resurrect the unfinished save');
+
+  const blocked = await send('Page.addScriptToEvaluateOnNewDocument', { source: `Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('blocked', 'SecurityError'); } });` });
+  await reload();
+  check(await evaluate('!document.querySelector(".storage-warning").hidden'), 'storage: blocked storage at startup is reported without crashing');
+  await press('[data-action=levels]');
+  await click(await evaluate('__cl.cell(4)'));
+  before = await state();
+  await press('.hud [data-action=home]');
+  await press('[data-action=levels]');
+  check(sameBoard(before, await state()), 'storage: blocked storage still allows session-only resume');
+  await send('Page.removeScriptToEvaluateOnNewDocument', { identifier: blocked.result.identifier });
+  await reload();
+
+  // ---- regression: short/narrow layouts, all controls reachable, orientation unchanged
+  const fitsBoard = async (label) => {
+    const s = await state(), { cell, ox, oy } = s.view, b = s.bounds;
+    check(ox >= b.x - 1 && oy >= b.y - 1 && ox + s.board.w * cell <= b.x + b.width + 1 && oy + s.board.h * cell <= b.y + b.height + 1,
+      `${label}: board stays inside its area, clear of the HUD and panel`);
+  };
+  const reachable = async (selector, label) => {
+    const bad = await evaluate(`(async () => {
+      const bad = [];
+      for (const el of document.querySelectorAll(${JSON.stringify(selector)})) {
+        if (!el.getClientRects().length) continue;
+        el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        await new Promise(requestAnimationFrame);
+        const r = el.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2;
+        if (r.width < 44 || r.height < 44 || x < 0 || y < 0 || x > innerWidth || y > innerHeight || !el.contains(document.elementFromPoint(x, y))) {
+          bad.push({ action: el.dataset.action || el.className, rect: r.toJSON(), hit: document.elementFromPoint(x, y)?.tagName, minHeight: getComputedStyle(el).minHeight });
+        }
+      }
+      return bad;
+    })()`);
+    check(bad.length === 0, `${label}: all controls reachable with ≥44px targets ${JSON.stringify(bad)}`);
+  };
+  for (const [label, width, height, dailyCell, largeCell] of [
+    ['small-phone', 320, 568, 40, 31], ['small-landscape', 568, 320, 35, 28],
+    ['landscape', 844, 390, 44, 35], ['short-desktop', 1280, 600, 52, 41],
+  ]) {
+    await dimensions(width, height, width < 1000);
+    await fresh();
+    const homeFits = await evaluate(`(() => {
+      const home = document.querySelector('.home-screen'); home.scrollTop = 0;
+      const logo = document.querySelector('.logo').getBoundingClientRect();
+      document.querySelector('.howto').scrollIntoView({ block: 'nearest' });
+      const how = document.querySelector('.howto').getBoundingClientRect();
+      return home.scrollWidth <= home.clientWidth + 1 && logo.top >= 0 && logo.left >= 0 && logo.right <= innerWidth && how.bottom <= innerHeight + 1;
+    })()`);
+    check(homeFits, `${label}: home title/instructions are reachable without horizontal overflow`);
+    await reachable('.home-screen button', `${label} home`);
+    await shot(`${label}-home`);
+    await press('[data-action=daily]');
+    await sleep(700);
+    check((await state()).view.cell >= dailyCell - 0.1, `${label}: daily cells are at least ${dailyCell}px`);
+    await fitsBoard(`${label} play`);
+    await reachable('.playbar button, .hud button', `${label} play`);
+    await click(await evaluate('__cl.cell(0)'));
+    before = await state();
+    await dimensions(width > height ? 390 : 844, width > height ? 844 : 390);
+    check(sameBoard(before, await state()), `${label}: changing orientation preserves every rotation, lock and move`);
+    await dimensions(width, height, width < 1000);
+    await shot(`${label}-play`);
+    await solveByTaps();
+    check(await waitWon(6000), `${label}: solving by real taps still reaches the result`);
+    check(await evaluate('document.querySelector(".hud-time").textContent === document.querySelector(".won-time").textContent'), `${label}: the result and HUD display the same rounded finish time`);
+    await fitsBoard(`${label} result`);
+    await reachable('.won-screen button', `${label} result`);
+    check(await evaluate('document.querySelector(".card").scrollWidth <= document.querySelector(".card").clientWidth + 1'), `${label}: result card has no horizontal overflow`);
+    await shot(`${label}-won`);
+    await press('[data-action=replay-ref]');
+    await sleep(700);
+    await fitsBoard(`${label} replay`);
+    await reachable('.player button, .player input', `${label} replay`);
+    check(await evaluate('document.querySelector(".player").scrollWidth <= document.querySelector(".player").clientWidth + 1'), `${label}: replay controls wrap without horizontal overflow`);
+    await shot(`${label}-replay`);
+    before = await state();
+    await mouse('mousePressed', await evaluate('__cl.cell(0)'));
+    await mouse('mouseMoved', [width - 2, height / 2]);
+    await mouse('mouseReleased', [width - 2, height / 2]);
+    check(sameBoard(before, await state()) && (await state()).playback.step === 0, `${label}: dragging across the replay board does not advance a step`);
+    await evaluate('document.getElementById("stage").focus()');
+    await key('Enter');
+    await waitFor('!__cl.state().playback.busy', 3000);
+    check((await state()).playback.step === 1, `${label}: Enter on the replay board advances exactly one tile`);
+    await evaluate('document.querySelector(".player-seek").focus()');
+    await key('ArrowRight');
+    check((await state()).playback.step === 2 && !(await state()).playback.busy, `${label}: the focused slider keeps its native arrow-key seeking`);
+    await evaluate('document.querySelector("[data-action=pb-prev]").focus()');
+    await key('Enter');
+    check((await state()).playback.step === 1, `${label}: Enter on Previous goes back, not forwards`);
+    await evaluate('document.querySelector("[data-action=pb-toggle]").focus()');
+    await key(' ');
+    check((await state()).playback.playing, `${label}: Space on Play toggles playback only once`);
+    await key(' ');
+    await evaluate('document.querySelector(".player-seek").focus()');
+    await key('Escape');
+    check((await state()).screen === 'won' && await evaluate('parseInt(document.querySelector(".hud-moves").textContent, 10) === Number(document.querySelector(".won-moves").textContent)'), `${label}: Escape from the slider returns to the result with the correct move count`);
+    await reload();
+    await press('[data-action=daily]');
+    check(await evaluate('document.querySelector(".hud-time").textContent === document.querySelector(".won-time").textContent && parseInt(document.querySelector(".hud-moves").textContent, 10) === Number(document.querySelector(".won-moves").textContent)'), `${label}: reopening a solved daily restores the correct HUD stats`);
+    await press('.hud [data-action=home]');
+    await evaluate(`localStorage.setItem('city-lights:v1:level', '40')`);
+    await press('[data-action=levels]');
+    await sleep(500);
+    check((await state()).view.cell >= largeCell - 0.1, `${label}: largest 9×10 board retains at least ${largeCell}px cells`);
+    await fitsBoard(`${label} largest board`);
+    check((await state()).moves === 0, `${label}: largest-board fixture starts with no saved moves`);
+    await click(await evaluate('__cl.cell(0)'));
+    await click(await evaluate('__cl.cell(89)'));
+    check((await state()).moves === 2, `${label}: opposite corners of the largest board are clickable`);
+    await shot(`${label}-largest`);
+    await evaluate(`window.__storageSetItem = Storage.prototype.setItem; Storage.prototype.setItem = function() { throw new DOMException('quota', 'QuotaExceededError'); };`);
+    await press('[data-action=sound]');
+    await sleep(700);
+    await fitsBoard(`${label} with storage warning`);
+    await reachable('.playbar button, .hud button', `${label} with storage warning`);
+    check(await evaluate('!document.querySelector(".storage-warning").hidden && document.querySelector(".storage-warning").scrollWidth <= document.querySelector(".storage-warning").clientWidth + 1'), `${label}: the storage warning is visible without horizontal overflow`);
+    await shot(`${label}-storage-warning`);
+    await evaluate('Storage.prototype.setItem = window.__storageSetItem; delete window.__storageSetItem;');
+    await press('[data-action=sound]');
   }
   check(errors.length === 0, `no console errors ${errors.length ? JSON.stringify(errors) : ''}`);
   ws.close();

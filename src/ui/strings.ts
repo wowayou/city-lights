@@ -10,6 +10,7 @@ export interface Strings {
   levelSub: (n: number, w: number, h: number) => string;
   howto: string;
   hint: string;
+  boardHelp: string;
   dailyTitle: (n: number) => string;
   levelTitle: (n: number) => string;
   moves: (n: number) => string;
@@ -24,6 +25,7 @@ export interface Strings {
   next: string;
   home: string;
   copied: string;
+  storageSession: string;
   resetConfirm: string;
   date: (key: string) => string;
   shareText: (n: number, size: string, lanterns: string, time: string, moves: number, hints: number) => string;
@@ -59,6 +61,7 @@ const zh: Strings = {
   levelSub: (n, w, h) => `第 ${n} 关 · ${w}×${h}`,
   howto: '点击地块旋转电线，长按或右键锁定。\n每户都亮灯、没有悬空的线头，就过关。',
   hint: '点击旋转 · 长按锁定',
+  boardHelp: '棋盘获得焦点后：方向键选格，空格或回车旋转，L 或 X 锁定，Z 撤销，H 提示。Tab 切换到按钮。回放时：左右键前后步进，空格播放或暂停。Esc 返回。',
   dailyTitle: (n) => `今日 #${n}`,
   levelTitle: (n) => `第 ${n} 关`,
   moves: (n) => `${n} 步`,
@@ -73,6 +76,7 @@ const zh: Strings = {
   next: '下一关',
   home: '主页',
   copied: '成绩已复制',
+  storageSession: '无法保存到此设备。本次进度仅留在当前页面，刷新或关闭会丢失。',
   resetConfirm: '再点一次，从头开始',
   date: (key) => `${Number(key.slice(5, 7))}月${Number(key.slice(8, 10))}日`,
   shareText: (n, size, lanterns, time, moves, hints) => `万家灯火 #${n} · ${size}\n${lanterns} ${time} · ${moves} 步${hints ? ` · 💡${hints}` : ''}`,
@@ -108,6 +112,7 @@ const en: Strings = {
   levelSub: (n, w, h) => `Level ${n} · ${w}×${h}`,
   howto: 'Tap a tile to turn it; long-press or right-click to lock it.\nLight every home with no loose wires to win.',
   hint: 'Tap to turn · hold to lock',
+  boardHelp: 'With the board focused: arrows select, Space or Enter turns, L or X locks, Z undoes, H gives a hint. Tab moves to buttons. In replays: left/right steps, Space plays or pauses. Escape goes back.',
   dailyTitle: (n) => `Daily #${n}`,
   levelTitle: (n) => `Level ${n}`,
   moves: (n) => `${n} ${n === 1 ? 'move' : 'moves'}`,
@@ -122,6 +127,7 @@ const en: Strings = {
   next: 'Next level',
   home: 'Home',
   copied: 'Result copied',
+  storageSession: 'Cannot save on this device. New progress stays only on this page and will be lost on reload or close.',
   resetConfirm: 'Tap again to start over',
   date: (key) => new Date(`${key}T12:00:00`).toLocaleDateString('en', { month: 'short', day: 'numeric' }),
   shareText: (n, size, lanterns, time, moves, hints) => `City Lights #${n} · ${size}\n${lanterns} ${time} · ${moves} moves${hints ? ` · 💡${hints}` : ''}`,
